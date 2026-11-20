@@ -1,3 +1,8 @@
+mod compressor;
+mod decompressor;
+mod cli;
+
+
 fn main() {
-    println!("Hello, world!");
+    cli::cli();
 }
