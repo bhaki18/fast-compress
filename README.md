@@ -1,83 +1,83 @@
 # fast-compress
 
-Compressore ed estrattore CLI scritto in Rust per archiviare in modo lossless file (binari e testuali) e intere alberature di cartelle all'interno di un unico file archivio `.cmpr`.
+A lossless CLI compressor and extractor written in Rust for packing arbitrary files (binary and text) and nested directory trees into a single `.cmpr` archive.
 
-## Caratteristiche principali
+## Key Features
 
-- **Supporto completo a file binari e testo:** opera direttamente sui byte grezzi (`u8`), senza richiedere codifica UTF-8.
-- **Archiviazione ricorsiva di cartelle:** preserva gerarchia delle sottocartelle, directory vuote e permessi Unix (`0o777`).
-- **Algoritmi di compressione lossless:**
-  - `auto` *(predefinito)*: usa **LZ77** con fallback automatico a `store` se il file non è comprimibile.
-  - `lz77`: codifica stile LZ4 con tabella hash in tempo $O(n)$ e supporto a match sovrapposti.
-  - `rle`: Run-Length Encoding byte-level stile PackBits.
-  - `store`: memorizzazione senza compressione.
-- **Integrità e sicurezza:**
-  - Checksum **CRC-32 (IEEE 802.3)** verificato su ogni file estratto.
-  - Sanitizzazione dei percorsi relativi in estrazione per prevenire *path traversal* (`../`, path assoluti, `\`, NUL byte).
-  - Prevenzione dell'auto-inclusione se l'archivio di destinazione si trova dentro la cartella sorgente (i symlink vengono saltati con avviso).
+- **Full binary and text support:** operates directly on raw bytes (`u8`), with no UTF-8 requirement.
+- **Recursive directory archiving:** preserves subdirectory hierarchy, empty directories, and Unix permissions (`0o777`).
+- **Lossless compression algorithms:**
+  - `auto` *(default)*: uses **LZ77** and automatically falls back to `store` when data is incompressible.
+  - `lz77`: LZ4-style hash-table encoding in $O(n)$ time with overlapping match support.
+  - `rle`: PackBits-style byte-level Run-Length Encoding.
+  - `store`: stores data uncompressed.
+- **Integrity and safety:**
+  - **CRC-32 (IEEE 802.3)** checksum verified for every extracted file.
+  - Relative path sanitization during extraction to prevent *path traversal* (`../`, absolute paths, `\`, NUL bytes).
+  - Self-inclusion prevention when the output archive resides inside the source directory (symlinks are skipped with a warning).
 
-## Compilazione
+## Building
 
 ```bash
 cargo build --release
 ```
 
-L'eseguibile compilato si trova in `target/release/fast-compress`.
+The compiled binary will be available at `target/release/fast-compress`.
 
-## Utilizzo
+## Usage
 
 ```bash
-# Comprimere un file o una cartella (destinazione predefinita: archive.cmpr)
-fast-compress -p ./percorso/input -c
+# Compress a file or directory (default destination: archive.cmpr)
+fast-compress -p ./path/to/input -c
 
-# Comprimere specificando destinazione e algoritmo
-fast-compress -p ./mia_cartella -c -d backup.cmpr -a lz77
+# Compress with a custom destination and algorithm
+fast-compress -p ./my_folder -c -d backup.cmpr -a lz77
 
-# Elencare il contenuto di un archivio
+# List archive contents
 fast-compress -p backup.cmpr -l
 
-# Estrarre un archivio (destinazione predefinita: extracted/)
+# Extract an archive (default destination: extracted/)
 fast-compress -p backup.cmpr -e -d ./output
 ```
 
-### Opzioni CLI
+### CLI Options
 
-| Flag | Forma estesa | Descrizione | Predefinito |
+| Flag | Long form | Description | Default |
 | :--- | :--- | :--- | :--- |
-| `-p` | `--path <PATH>` | Percorso sorgente da comprimere o archivio `.cmpr` da leggere | *(obbligatorio)* |
-| `-c` | `--compress` | Comprime file o cartella in un archivio `.cmpr` | `false` |
-| `-e` | `--extract` | Estrae gli elementi dall'archivio `.cmpr` | `false` |
-| `-l` | `--list` | Mostra l'elenco degli elementi presenti nell'archivio | `false` |
-| `-d` | `--destination <DEST>` | File archivio in uscita (`-c`) o cartella di estrazione (`-e`) | `archive.cmpr` / `extracted` |
-| `-a` | `--algorithm <ALGO>` | Algoritmo: `auto`, `lz77`, `rle`, `store` | `auto` |
+| `-p` | `--path <PATH>` | Source file/directory to compress or `.cmpr` archive to read | *(required)* |
+| `-c` | `--compress` | Compress a file or directory into a `.cmpr` archive | `false` |
+| `-e` | `--extract` | Extract entries from a `.cmpr` archive | `false` |
+| `-l` | `--list` | List entries stored inside an archive | `false` |
+| `-d` | `--destination <DEST>` | Output archive file (`-c`) or extraction directory (`-e`) | `archive.cmpr` / `extracted` |
+| `-a` | `--algorithm <ALGO>` | Compression algorithm: `auto`, `lz77`, `rle`, `store` | `auto` |
 
-*(Nota: i flag legacy `--exctract` e `--destionation` restano supportati come alias.)*
+*(Note: legacy typo flags `--exctract` and `--destionation` remain supported as aliases.)*
 
-## Formato dell'archivio `.cmpr`
+## `.cmpr` Archive Format
 
-Ogni archivio inizia con l'header magic a 8 byte `FCMPR\x01\x00\x00`, seguito da una sequenza di entry:
+Every archive starts with an 8-byte magic header `FCMPR\x01\x00\x00`, followed by a sequence of entries:
 
-- **Header entry:** `entry_kind (1B: 0=dir, 1=file)` | `mode (u32 LE)` | `path_len (u32 LE)` | `path (UTF-8 '/')`
-- **Solo per i file:** `method (1B: 0=store, 1=rle, 2=lz77)` | `original_size (u64 LE)` | `compressed_size (u64 LE)` | `crc32 (u32 LE)` | `data`
+- **Entry header:** `entry_kind (1B: 0=dir, 1=file)` | `mode (u32 LE)` | `path_len (u32 LE)` | `path (UTF-8 '/')`
+- **File entries only:** `method (1B: 0=store, 1=rle, 2=lz77)` | `original_size (u64 LE)` | `compressed_size (u64 LE)` | `crc32 (u32 LE)` | `data`
 
-## Struttura del progetto
+## Project Structure
 
 ```text
 src/
-├── main.rs                    # Entry point e gestione errori CLI
-├── cli/cli.rs                 # Parsing argomenti (clap) e dispatch comandi
-├── compressor/compressor.rs   # Orchestrazione compressione e riepilogo
-├── decompressor/decompressor.rs # Estrazione e listing archivi (-e, -l)
-├── lz77/lz77.rs               # Codec LZ77 con hash table
-├── rle/rle.rs                 # Codec RLE byte-level (PackBits-style)
+├── main.rs                    # Entry point and CLI error handling
+├── cli/cli.rs                 # Argument parsing (clap) and command dispatch
+├── compressor/compressor.rs   # Compression orchestration and summary output
+├── decompressor/decompressor.rs # Archive extraction and listing (-e, -l)
+├── lz77/lz77.rs               # Hash-table LZ77 codec
+├── rle/rle.rs                 # Byte-level RLE codec (PackBits-style)
 └── libs/
-    ├── archive.rs             # Costanti formato .cmpr, CRC-32, validazione path
-    ├── read_file.rs           # Lettura binaria e permessi file
-    ├── read_folder.rs         # Attraversamento ricorsivo cartelle
-    ├── compress_file.rs       # Compressione singolo file
-    ├── compress_folder.rs     # Compressione ricorsiva cartella
-    ├── create_archive.rs      # Writer bufferizzato archivio .cmpr
-    ├── push_to_archive.rs     # Serializzazione entry nell'archivio
-    ├── open_archive.rs        # Reader streaming e validazione header
-    └── decompress_file.rs     # Verifica CRC-32, decompressione ed estrazione
+    ├── archive.rs             # .cmpr format constants, CRC-32, path validation
+    ├── read_file.rs           # Binary file reader and permissions lookup
+    ├── read_folder.rs         # Recursive directory traversal
+    ├── compress_file.rs       # Single-file compression
+    ├── compress_folder.rs     # Recursive folder compression
+    ├── create_archive.rs      # Buffered .cmpr archive writer
+    ├── push_to_archive.rs     # Archive entry serialization
+    ├── open_archive.rs        # Streaming archive reader and header validation
+    └── decompress_file.rs     # CRC-32 check, decompression, and extraction
 ```
