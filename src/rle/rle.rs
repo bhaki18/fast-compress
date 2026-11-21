@@ -1,28 +1,173 @@
-pub fn rle(content:String)->String{
-    if content.len() < 1{
-        return "".to_string();
+const MAX_RUN_LEN: usize = 130;
+const MIN_RUN_LEN: usize = 3;
+const MAX_LIT_LEN: usize = 128;
+const MAX_DECOMPRESS_PREALLOC: usize = 64 * 1024 * 1024;
+
+#[inline]
+fn flush_literals(out: &mut Vec<u8>, lits: &[u8]) {
+    if !lits.is_empty() {
+        debug_assert!(lits.len() <= MAX_LIT_LEN);
+        out.push((lits.len() - 1) as u8);
+        out.extend_from_slice(lits);
     }
-    let mut counter: u32 = 0;
-    let mut carattere: char = '\0';
-    let mut stringa_compressa = String::new();
-    for i in content.chars(){
-        if carattere == '\0'{
-            carattere = i;
-            counter +=1;
-            continue;
+}
+
+/// Compresses arbitrary bytes using a PackBits-style lossless Run-Length Encoding.
+///
+/// Packet layout:
+/// - `0x00..=0x7F` (`n`): literal chunk of `n + 1` bytes (`1..=128`) followed by those bytes.
+/// - `0x80..=0xFF` (`0x80 | n`): run of `n + 3` identical bytes (`3..=130`) followed by 1 byte.
+pub fn rle_compress(input: &[u8]) -> Vec<u8> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::with_capacity(input.len() / 2 + 8);
+    let mut lit_start = 0usize;
+    let mut i = 0usize;
+
+    while i < input.len() {
+        let byte = input[i];
+        let mut run = 1usize;
+        while i + run < input.len() && run < MAX_RUN_LEN && input[i + run] == byte {
+            run += 1;
         }
 
-        if carattere == i{
-            counter+=1;
-        }else{
-            stringa_compressa += &counter.to_string();
-            stringa_compressa += &carattere.to_string();
-            counter = 1;
-            carattere = i;
+        if run >= MIN_RUN_LEN {
+            flush_literals(&mut out, &input[lit_start..i]);
+            out.push(0x80 | ((run - MIN_RUN_LEN) as u8));
+            out.push(byte);
+            i += run;
+            lit_start = i;
+        } else {
+            i += 1;
+            if i - lit_start == MAX_LIT_LEN {
+                flush_literals(&mut out, &input[lit_start..i]);
+                lit_start = i;
+            }
         }
-
     }
-    /* `std::string::String` value */
-    println!("{}",stringa_compressa);
-    return stringa_compressa;
+
+    flush_literals(&mut out, &input[lit_start..]);
+    out
+}
+
+/// Decompresses a byte slice encoded with [`rle_compress`].
+///
+/// When `expected_size` is provided, bounds are checked before every write and the
+/// final decompressed length must match it exactly.
+pub fn rle_decompress(input: &[u8], expected_size: Option<usize>) -> Result<Vec<u8>, String> {
+    let prealloc = expected_size
+        .unwrap_or(input.len())
+        .min(MAX_DECOMPRESS_PREALLOC);
+    let mut out = Vec::with_capacity(prealloc);
+    let mut pos = 0usize;
+
+    while pos < input.len() {
+        let header = input[pos];
+        pos += 1;
+
+        if (header & 0x80) != 0 {
+            let run_len = usize::from(header & 0x7F) + MIN_RUN_LEN;
+            if pos >= input.len() {
+                return Err("truncated RLE run packet".to_string());
+            }
+            let byte = input[pos];
+            pos += 1;
+
+            if let Some(exp) = expected_size
+                && out.len().checked_add(run_len).is_none_or(|n| n > exp)
+            {
+                return Err(format!(
+                    "RLE run packet exceeds expected output size ({exp} bytes)"
+                ));
+            }
+
+            out.resize(out.len() + run_len, byte);
+        } else {
+            let lit_len = usize::from(header) + 1;
+            if input.len() - pos < lit_len {
+                return Err("truncated RLE literal packet".to_string());
+            }
+
+            if let Some(exp) = expected_size
+                && out.len().checked_add(lit_len).is_none_or(|n| n > exp)
+            {
+                return Err(format!(
+                    "RLE literal packet exceeds expected output size ({exp} bytes)"
+                ));
+            }
+
+            out.extend_from_slice(&input[pos..pos + lit_len]);
+            pos += lit_len;
+        }
+    }
+
+    if let Some(exp) = expected_size
+        && out.len() != exp
+    {
+        return Err(format!(
+            "RLE size mismatch: expected {exp} bytes, got {}",
+            out.len()
+        ));
+    }
+
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_roundtrip(data: &[u8]) {
+        let compressed = rle_compress(data);
+        let decompressed = rle_decompress(&compressed, Some(data.len())).unwrap();
+        assert_eq!(decompressed, data);
+        let decompressed_no_hint = rle_decompress(&compressed, None).unwrap();
+        assert_eq!(decompressed_no_hint, data);
+    }
+
+    #[test]
+    fn empty_and_short_runs_roundtrip() {
+        assert_roundtrip(&[]);
+        for len in [1, 2, 3, 129, 130, 131, 1000] {
+            assert_roundtrip(&vec![0xAA; len]);
+        }
+    }
+
+    #[test]
+    fn literal_boundaries_and_all_byte_values_roundtrip() {
+        let seq128: Vec<u8> = (0u8..128).collect();
+        let seq129: Vec<u8> = (0u8..129).collect();
+        let all_bytes: Vec<u8> = (0u8..=255).collect();
+
+        assert_roundtrip(&seq128);
+        assert_roundtrip(&seq129);
+        assert_roundtrip(&all_bytes);
+    }
+
+    #[test]
+    fn mixed_binary_payload_roundtrip_and_ratio() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x00; 250]);
+        data.extend_from_slice(b"Hello\xFF\xFE\x00\x01World");
+        data.extend_from_slice(&[0x7F; 64]);
+        data.extend((0u8..200).map(|b| b.wrapping_mul(37)));
+
+        let compressed = rle_compress(&data);
+        assert!(compressed.len() < data.len());
+        assert_eq!(rle_decompress(&compressed, Some(data.len())).unwrap(), data);
+    }
+
+    #[test]
+    fn corrupt_streams_return_errors() {
+        // Run header with missing repeated byte.
+        assert!(rle_decompress(&[0x80], None).is_err());
+        // Literal header claiming 5 bytes, only 2 provided.
+        assert!(rle_decompress(&[0x04, 0x01, 0x02], None).is_err());
+        // Valid stream whose output length doesn't match expected_size.
+        let encoded = rle_compress(b"AAAA");
+        assert!(rle_decompress(&encoded, Some(3)).is_err());
+        assert!(rle_decompress(&encoded, Some(5)).is_err());
+    }
 }

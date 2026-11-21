@@ -1,8 +1,37 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io::{self, BufWriter, Write};
+use std::path::Path;
 
-pub fn create_archive(dest:String)-> String{ // restituisce la path dell'archivio
-    fs::create_dir_all(&dest);
-    let starter_content = "74 68 69 73 20 69 73 20 61 6E 20 61 72 63 68 69 76 65";
-    fs::write(dest.clone() + "/" + ".__starter__",starter_content);
-    return dest;
+use crate::libs::archive::ARCHIVE_MAGIC;
+
+/// Buffered writer for creating a `.cmpr` archive file.
+pub struct ArchiveWriter {
+    writer: BufWriter<File>,
+}
+
+impl ArchiveWriter {
+    /// Returns mutable access to the underlying buffered file writer.
+    pub fn writer_mut(&mut self) -> &mut BufWriter<File> {
+        &mut self.writer
+    }
+
+    /// Flushes all buffered archive bytes to disk.
+    pub fn finish(mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+/// Creates a new `.cmpr` archive at `dest` and writes the magic header.
+pub fn create_archive(dest: &Path) -> io::Result<ArchiveWriter> {
+    if let Some(parent) = dest.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)?;
+    }
+
+    let file = File::create(dest)?;
+    let mut writer = BufWriter::new(file);
+    writer.write_all(ARCHIVE_MAGIC)?;
+
+    Ok(ArchiveWriter { writer })
 }
