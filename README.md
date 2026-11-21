@@ -13,4 +13,4 @@ ma non so quanto possano essere efficaci,ma proviamo
 la solita struttura numero-lettura tipo "AAABBBCCCD1100" -> "3A\3B\4C\1d\2|1\2|0"
 è facile da scrivere e da capire ma forse troppo poco efficace
 
-### secondo algoritmo
+non ho altre idee quindi inizio a scrivere questo per ora
